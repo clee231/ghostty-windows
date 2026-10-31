@@ -615,6 +615,7 @@ jobs:
             x86_64-linux,
             x86_64-linux-musl,
             x86_64-windows-gnu,
+            aarch64-windows-gnu,
             # doesn't work yet, we need a way to find msvc libc/c++ headers
             # x86_64-windows-msvc
           ]
@@ -934,7 +935,17 @@ jobs:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
   build-libghostty-vt-windows:
-    runs-on: namespace-profile-ghostty-windows
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: namespace-profile-ghostty-windows
+          # GitHub-hosted native Windows 11 ARM64 runner.
+          - arch: aarch64
+            runner: windows-11-arm
+    name: build-libghostty-vt-windows (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     needs: test
     steps:
@@ -957,7 +968,21 @@ jobs:
   build-windows-app:
     if: ${{ !failure() && !cancelled() && needs.skip.outputs.skip != 'true' }}
     needs: skip
-    runs-on: ${{ github.repository == 'ghostty-org/ghostty' && 'namespace-profile-ghostty-windows' || 'windows-2025' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ${{ github.repository == 'ghostty-org/ghostty' && 'namespace-profile-ghostty-windows' || 'windows-2025' }}
+            build_flags: ""
+          # Native ARM64 build + tests on GitHub's hosted Windows 11 ARM64
+          # runner. -Dcpu=baseline so the artifact runs on any ARMv8 Windows
+          # device, not just the runner's CPU.
+          - arch: aarch64
+            runner: windows-11-arm
+            build_flags: "-Dcpu=baseline"
+    name: build-windows-app (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
       - name: Checkout code
@@ -966,7 +991,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          cache-key: build-windows-app-${{ hashFiles('build.zig.zon') }}
+          cache-key: build-windows-app-${{ matrix.arch }}-${{ hashFiles('build.zig.zon') }}
 
       - name: Fetch dependencies
         shell: pwsh
@@ -979,12 +1004,12 @@ jobs:
           exit 1
 
       - name: Build
-        run: zig build -Dapp-runtime=win32 -Doptimize=ReleaseFast
+        run: zig build -Dapp-runtime=win32 -Doptimize=ReleaseFast ${{ matrix.build_flags }}
 
       - name: Upload ghostty.exe
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ghostty-windows-x86_64
+          name: ghostty-windows-${{ matrix.arch }}
           path: zig-out/bin/ghostty.exe
           if-no-files-found: error
 
