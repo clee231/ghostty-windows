@@ -10,6 +10,10 @@
 #ifndef Arch
   #define Arch "x86_64"
 #endif
+; Inno Setup architecture identifier: x64compatible (default) or arm64.
+#ifndef InnoArch
+  #define InnoArch "x64compatible"
+#endif
 
 #define AppName "Ghostty"
 #define AppExe "ghostty.exe"
@@ -30,8 +34,8 @@ DisableProgramGroupPage=yes
 DisableDirPage=auto
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog commandline
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed={#InnoArch}
+ArchitecturesInstallIn64BitMode={#InnoArch}
 MinVersion=10.0.17763
 LicenseFile={#SourceDir}\LICENSE
 SetupIconFile={#SourcePath}\..\ghostty.ico
