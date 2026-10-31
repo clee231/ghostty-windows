@@ -96,7 +96,7 @@ fn taskDialogIndirect() ?TaskDialogIndirectFn {
     task_dialog_loaded = true;
     const module = LoadLibraryW(L("comctl32.dll")) orelse return null;
     const proc = GetProcAddress(module, "TaskDialogIndirect") orelse return null;
-    task_dialog_fn = @ptrCast(proc);
+    task_dialog_fn = @ptrCast(@alignCast(proc));
     return task_dialog_fn;
 }
 

@@ -378,9 +378,9 @@ const WindowsPty = struct {
             const resize = k.GetProcAddress(module, "ResizePseudoConsole") orelse return system;
             const close = k.GetProcAddress(module, "ClosePseudoConsole") orelse return system;
             return .{
-                .create = @ptrCast(create),
-                .resize = @ptrCast(resize),
-                .close = @ptrCast(close),
+                .create = @ptrCast(@alignCast(create)),
+                .resize = @ptrCast(@alignCast(resize)),
+                .close = @ptrCast(@alignCast(close)),
                 .bundled = true,
             };
         }
