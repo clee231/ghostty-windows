@@ -472,8 +472,8 @@ test "wgl context" {
     defer Context.releaseCurrent();
 
     const GetStringFn = *const fn (name: c_uint) callconv(.winapi) ?[*:0]const u8;
-    const getString: GetStringFn = @ptrCast(getProcAddress("glGetString") orelse
-        return error.TestUnexpectedResult);
+    const getString: GetStringFn = @ptrCast(@alignCast(getProcAddress("glGetString") orelse
+        return error.TestUnexpectedResult));
     const GL_VENDOR = 0x1F00;
     const GL_RENDERER = 0x1F01;
     const GL_VERSION = 0x1F02;
