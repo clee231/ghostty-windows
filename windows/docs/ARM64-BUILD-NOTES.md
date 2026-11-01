@@ -169,26 +169,61 @@ The source patch (`arm64-cross-build.diff`) is still needed in CI. Fix #2 is nee
 
 ## Fork & CI
 
-Branch `feature/arm64-build`, created from upstream `main` (`c975f49`) in `/workspace/ghostty-windows`:
+- **Fork:** https://github.com/clee231/ghostty-windows
+- **Branch:** https://github.com/clee231/ghostty-windows/tree/feature/arm64-build
 
-| Commit | Summary |
+This branch was cut from upstream `main` at `c975f49`. Nothing has been sent upstream: no PR, and no releases created.
+
+### Commits
+
+| Commit | What |
 |---|---|
-| `4263e89` | `win32: fix Windows ARM64 (aarch64) build`: the source patch (`arm64-cross-build.diff`) |
-| `f421f05` | `ci(test): build Windows app and libghostty-vt for arm64 too` |
-| `2301f99` | `release-windows: build, package and publish arm64 alongside x64` (also changes `ghostty.iss`) |
-| (this commit) | `docs(windows): add ARM64 build notes` |
+| `4263e89` | win32: fix the Windows ARM64 build (glad target, plus `@alignCast` at the `GetProcAddress` casts) |
+| `f421f05` | ci(test): first draft of the arm64 jobs (later reworked) |
+| `2301f99` | release-windows: arm64 matrix, `publish` job, `dry_run` input, `ghostty.iss` `InnoArch` |
+| `a2c85ca` | docs: these notes |
+| `e6ee352` | ci: x86_64 Zig under emulation on windows-11-arm (later replaced) |
+| `f6c95bb` | build: run glad translate-c with the GNU ABI on Windows targets (fixes a regression on x64 MSVC) |
+| `3e663a5` | win32: add `@alignCast` in the wgl test (an ARM64 compile error that only shows up in tests) |
+| `ee7b35e` | build.zig: with `-Demit-test-exe`, set `skip_foreign_checks`, so a test binary the host can't run gets built and installed instead of failing |
+| `44f75c1` | ci(test): cross-compile ARM64 on x64 and run the tests on windows-11-arm |
+| `350c357` | release-windows: same cross-compile-plus-native-test layout |
 
-### Workflow changes
+### CI issues found and how they were fixed
 
-I reviewed every workflow. Only `test.yml` and `release-windows.yml` build anything for Windows. `release-tip`, `release-tag` and `publish-tag` are upstream's macOS and Linux release flows, and the rest are flatpak, snap, nix and repo housekeeping. No existing job was removed, and the x86_64 commands are unchanged.
+1. **The native Zig 0.16.0 for aarch64-windows crashes.**
+   On `windows-11-arm`, `mlugg/setup-zig` installs `zig-aarch64-windows-0.16.0`. `zig version` and `zig build --fetch` work, but `zig build` exits with code 1 after 0.4 s and prints nothing. This is a known upstream bug, https://codeberg.org/ziglang/zig/issues/31865 (STATUS_ACCESS_VIOLATION).
+   - Run with the crash: https://github.com/clee231/ghostty-windows/actions/runs/41261075432
+   - Fix: don't run Zig on ARM64 at all (see 3).
+
+2. **x86_64 MSVC regression from my glad fix.**
+   Once the real target was passed to the `opengl` dependency, native MSVC builds ran glad's translate-c against MSVC's `winnt.h`. Zig's translate-c can't parse it (`DECLSPEC_ALIGN` and `_CONTEXT` errors).
+   - Run: https://github.com/clee231/ghostty-windows/actions/runs/41261338138
+   - Fix (`f6c95bb`): on Windows, always translate glad with the GNU ABI. The GL types are the same under both ABIs, and before my patch native Windows builds already resolved this dependency to `native-windows-gnu`.
+   - Result: x86_64 build and tests are green in https://github.com/clee231/ghostty-windows/actions/runs/41263757057
+
+3. **x86_64 Zig under emulation on windows-11-arm works, but is too slow.**
+   With this approach the app build took about 22 min and the test build about 29 min, so the job hit its 60-min timeout (run 41263757057).
+   - The ARM64 test binary did run natively, and tests 1 through 1987 of 3870 had passed (none failed) when the job was cancelled.
+   - Along the way it found one more ARM64 compile error, in the wgl test (`3e663a5`).
+   - Fix (`44f75c1`, `350c357`): cross-compile the app and test binary with `-Dtarget=aarch64-windows-gnu -Dcpu=baseline` on the x64 Windows runner, upload them as artifacts, and run `ghostty-test.exe` natively on `windows-11-arm` in a dependent job.
+
+### Workflow summary (current)
 
 - **`test.yml`**
-  - `build-windows-app` (the one Windows job that runs on forks, on `windows-2025`): now a matrix of `x86_64` (same runner as before) and `aarch64` on `windows-11-arm`. The ARM64 leg is a native ReleaseFast build with `-Dcpu=baseline`, runs `zig build test -Dapp-runtime=win32`, and uploads the `ghostty-windows-aarch64` artifact.
-  - `build-libghostty-vt`: adds the `aarch64-windows-gnu` cross target. This job only runs upstream.
-  - `build-libghostty-vt-windows`: now a matrix of `x86_64` (namespace runner) and `aarch64` (`windows-11-arm`). This job only runs upstream.
-- **`release-windows.yml`**: the single `release` job becomes a `build` matrix (x64 on `windows-2025`, arm64 on `windows-11-arm`) plus a `publish` job. Each matrix leg builds, tests, runs `make-zip.ps1 -Arch <arch>` and runs ISCC with `/DArch` and `/DInnoArch`. The `publish` job merges both legs' assets into one `SHA256SUMS.txt` and creates or updates the release.
-  - New assets: `Ghostty-Windows-arm64.zip` and `Ghostty-Windows-Setup-arm64.exe`. The x64 asset names are unchanged.
-  - New `dry_run` input for `workflow_dispatch`: it builds everything and uploads the combined assets as an artifact without touching releases.
-- **`dist/windows/installer/ghostty.iss`**: `ArchitecturesAllowed` and `ArchitecturesInstallIn64BitMode` now come from `{#InnoArch}`, which defaults to `x64compatible`, so the x64 installer is unchanged.
-- `actionlint` 1.7.7 reports no issues in either file, apart from the expected "unknown label" warnings for upstream's namespace.so runners. New action uses are pinned to the same SHAs the repo already uses.
+  - `build-windows-app` (x86_64) is byte-for-byte the same as upstream.
+  - New `build-windows-app-aarch64` job on the same x64 runner: cross-builds `ghostty.exe` (uploaded as artifact `ghostty-windows-aarch64`) and the test exe.
+  - New `test-windows-app-aarch64` job on `windows-11-arm`: runs the test exe natively.
+  - `build-libghostty-vt` gets an `aarch64-windows-gnu` cross target. This job only runs upstream.
+  - `build-libghostty-vt-windows` is left as upstream's x86_64-only job. An ARM64 leg there would hit the native Zig crash, and ARM64 libghostty-vt is already covered by the cross target above.
+- **`release-windows.yml`**
+  - `build` matrix: both arches run on `windows-2025`, and each leg builds, packages the zip, builds the Inno installer (`/DArch`, `/DInnoArch`), and uploads its assets. The aarch64 leg also builds the test exe.
+  - `test-arm64` job on `windows-11-arm` runs that test exe.
+  - `publish` waits for both, writes a single combined `SHA256SUMS.txt`, and creates or updates the release. With `dry_run=true` it only uploads the combined assets as a workflow artifact.
+- **`ghostty.iss`:** `ArchitecturesAllowed` comes from `InnoArch`, which defaults to `x64compatible`.
+- **`build.zig`:** `-Demit-test-exe` now also sets `skip_foreign_checks` on the test Run step.
 
+### Known limitations
+
+- **`release-windows.yml` can't be manually triggered on the fork yet.** GitHub has only registered `nix.yml` and `test.yml` for this fork, and `gh workflow run release-windows.yml` returns `HTTP 404: workflow release-windows.yml not found on the default branch`. It will register once a commit touching that file lands on the fork's `main`, or when a `windows-v*` tag is pushed (note that a tag push publishes a real release).
+- **Not yet launched on Windows on ARM hardware:** the app's GUI, ConPTY, and OpenGL via the Compatibility Pack still need a check on a real device.
