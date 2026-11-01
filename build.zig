@@ -404,6 +404,11 @@ pub fn build(b: *std.Build) !void {
         // Normal test running
         const test_run = b.addRunArtifact(test_exe);
         config.addPatchElf(test_exe, &test_run.step);
+        // With -Demit-test-exe, allow building (and installing) a test
+        // binary the build host cannot run, e.g. an x86_64 Zig running under
+        // emulation on Windows ARM64 while targeting aarch64-windows. The
+        // installed zig-out/bin/ghostty-test(.exe) is then run directly.
+        if (config.emit_test_exe) test_run.skip_foreign_checks = true;
         test_step.dependOn(&test_run.step);
 
         // Normal tests always test our libghostty modules

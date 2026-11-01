@@ -1033,7 +1033,19 @@ jobs:
           if-no-files-found: error
 
       - name: Test
+        if: matrix.arch != 'aarch64'
         run: zig build test -Dapp-runtime=win32 ${{ matrix.build_flags }}
+
+      # The emulated x86_64 Zig sees an x86_64 host, so it refuses to run the
+      # aarch64 test binary itself. Build + install it, then run it natively.
+      - name: Test (aarch64, run natively)
+        if: matrix.arch == 'aarch64'
+        shell: pwsh
+        run: |
+          zig build test -Dapp-runtime=win32 ${{ matrix.build_flags }} -Demit-test-exe -p zig-test
+          if ($LASTEXITCODE -ne 0) { throw "building tests failed with $LASTEXITCODE" }
+          & .\zig-test\bin\ghostty-test.exe
+          if ($LASTEXITCODE -ne 0) { throw "ghostty-test.exe failed with $LASTEXITCODE" }
 
   build-linux:
     strategy:
