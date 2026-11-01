@@ -292,3 +292,71 @@ What `file` reports:
 
 - **Not checked on a real device:** the app has not been launched on Windows on ARM hardware (GUI, ConPTY, OpenGL through the Compatibility Pack, installer).
 - **Manual dispatch on the fork:** `workflow_dispatch` of `release-windows.yml` won't work there until a commit touching that file lands on the fork's default branch.
+
+## Crash fix: ARM64 access violation at ghostty.exe+0x21ecd4 (Snapdragon Surface)
+
+**Report.** Chase's WER report gives these details:
+- ghostty.exe 1.3.2.0, PE timestamp 0x303e986c.
+- Exception 0xc0000005 at offset 0x21ecd4.
+- `Report.wer`: StackHash fault module, Exception Data 8 (an execute violation, so it jumped to a garbage address).
+- The loaded modules include OPENGL32 → OpenGLOn12 → qcdx12arm64xum.
+
+**Which exe.** The timestamp matches the arm64 zip from release dry run 41275315973 (commit `903ccb9`): `ghostty-arm64-out/release-test/unz-arm64/ghostty/bin/ghostty.exe`.
+
+**Symbolizing.**
+1. I rebuilt `903ccb9` with the same flags into `/tmp/repro-903`:
+   `-Dapp-runtime=win32 -Doptimize=ReleaseFast -Dcpu=baseline -Dtarget=aarch64-windows-gnu -Dversion-string=1.3.2-windows.0-arm64test`
+   Its section sizes and code at the RVA are identical to the crashing exe.
+2. I built the same commit again with `-Dstrip=false` (to get a PDB) into `/tmp/repro-903-dbg`.
+3. I used llvm-19 tools, extracted from the Debian debs into `/tmp/llvmdeb` without installing; the wrapper is `~/tools/llvm`.
+4. Each binary has exactly one `mov w0,#0xba2` (GL_VIEWPORT). The PDB `S_LPROC32` record covering it is **`drawFrame(renderer.Thread*, bool)`**, with `OpenGL.surfaceSize()` inlined: `gl.glad.context.GetIntegerv.?(GL_VIEWPORT, &viewport)` (src/renderer/OpenGL.zig:277). `glad.context` is a `threadlocal`.
+
+**Disassembly at the fault.** The function starts at 0x21ec24.
+
+```
+ldr  x9, [x18,#0x58]        ; TEB->ThreadLocalStoragePointer
+ldr  w8, [x28,#0xd00]       ; _tls_index (TLS dir AddressOfIndex = 0x141A00D00)
+ldr  x8, [x9,x8,lsl#3]      ; this module's TLS block
+add  x8, x8, #0x20, lsl#12  ; SECREL_HIGH12A  <-- 0x20000: wrong
+add  x8, x8, #0x48          ; SECREL_LOW12A
+ldr  x8, [x8,#0x5c0]        ; <== 0x21ecd4: glad.context.GetIntegerv
+blr  x8
+```
+
+The same site in the unstripped build is `add x8,x8,#0,lsl#12` / `add #0x48` / `ldr [x8,#0x5c0]`, which is TLS+0x608, in bounds. The stripped build reads TLS+0x20608, but the `.tls` block is only 0x11c8/0x11d0 bytes. So it reads whatever heap memory lies 128 KiB past the block: AV on read (P9=8) or a call to garbage (Exception Data 8). Which one happens depends on memory layout, so the crash is intermittent.
+
+**It's not a one-off.** I scanned every `[x18,#0x58]` TLS sequence (`~/tools/tlsscan.py`):
+
+| build | TLS accesses | out of bounds |
+|---|---|---|
+| crashing exe (stripped, CI) | 1719 | **247** (offsets 0x8030 to 0x20e70) |
+| local repro (stripped) | 1719 | **247** (identical) |
+| `903ccb9` built with `-Dstrip=false` | 1735 | 0 |
+| fix `ec1fb09` with the release flags | 1735 | 0 |
+
+The scanner's one other hit in the unstripped builds, `0x1e66`, is a false positive: x8 is reused, and the real offset is 0x1148.
+
+**Root cause.** This is ziglang/zig#31865 ("LLVM emits broken TLS access sequence on aarch64-windows for private thread_locals mixed with non-private ones"). With `strip=true`, Zig gives threadlocals private linkage, and on aarch64-windows the SECREL relocations for those come out wrong. ReleaseFast defaults to `strip=true`, so every release ARM64 build was affected.
+
+None of the suspects from the report is the cause:
+- not alignment or ptrCast (that would trap differently, and the build already has `@alignCast`);
+- not a startup race;
+- not an OpenGL compat layer returning null (the loaded function pointer is never read from the right slot);
+- not uninitialized data.
+
+**Fix** (`ec1fb09`): `src/build/Config.zig` forces `strip=false` for aarch64-windows, and warns if `-Dstrip=true` is passed explicitly.
+- No workflow change is needed: the release/CI builds pick up the new default.
+- The exe grows from 27.4 MB to 28.2 MB (unwind tables plus the debug directory).
+- The PDB is written next to the exe in `-p` and is not shipped, because make-zip copies only `ghostty.exe`.
+- x64 is unaffected (the issue is aarch64-only), so stripping is unchanged there.
+
+**Test build.** the build machine's `ghostty-arm64-out/crashfix/Ghostty-Windows-arm64-crashfix.zip` (version string `1.3.2-windows.0-arm64crashfix`).
+- Cross-built locally from `ec1fb09` with the release flags.
+- Laid out the same way as make-zip: the file list is identical to the release zip, with the ARM64 ConPTY 1.25.260710002-preview.
+- `ghostty-arm64-crashfix.pdb` is next to it for symbolizing future crashes. PE timestamp 0xdb8f775b.
+
+**CI.** Test run https://github.com/clee231/ghostty-windows/actions/runs/41349347458 passed on `ec1fb09`:
+- `build-windows-app`, `build-windows-app-aarch64` and `test-windows-app-aarch64` (windows-11-arm) were all green.
+- I scanned that run's `ghostty-windows-aarch64/ghostty.exe` too: 1735 TLS accesses, 0 out of bounds.
+
+**Still to verify:** launch the crashfix zip on the Surface. The fix is confirmed statically, from the disassembly and the TLS scan, but not yet on hardware.
