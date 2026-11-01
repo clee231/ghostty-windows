@@ -411,15 +411,31 @@ pub fn init(b: *std.Build, appVersion: []const u8, libVersion: []const u8) !Conf
         "Build a Position Independent Executable. Default true for system packages.",
     ) orelse system_package;
 
-    config.strip = b.option(
+    const strip_opt = b.option(
         bool,
         "strip",
         "Strip the final executable. Default true for fast and small releases",
-    ) orelse switch (optimize) {
+    );
+    config.strip = strip_opt orelse switch (optimize) {
         .Debug => false,
         .ReleaseSafe => false,
         .ReleaseFast, .ReleaseSmall => true,
     };
+
+    // Zig 0.16.0 miscompiles threadlocal accesses on aarch64-windows when
+    // stripping: stripped modules give threadlocals private linkage, and
+    // LLVM then emits SECREL_HIGH12A/LOW12 sequences whose offsets land
+    // far outside the .tls block (ziglang/zig#31865). A ReleaseFast build
+    // read glad's threadlocal GL context at TLS+0x20608 (the block is
+    // 0x11d0 bytes) and crashed in renderer.Thread.drawFrame. Never strip
+    // there; the PDB stays next to the build output and is not shipped.
+    if (target.result.os.tag == .windows and
+        target.result.cpu.arch == .aarch64 and
+        config.strip)
+    {
+        if (strip_opt != null) std.log.warn("ignoring -Dstrip=true on aarch64-windows (ziglang/zig#31865)", .{});
+        config.strip = false;
+    }
 
     //---------------------------------------------------------------
     // Artifacts to Emit
