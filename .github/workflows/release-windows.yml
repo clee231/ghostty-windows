@@ -4,11 +4,6 @@ on:
   push:
     tags:
       - "windows-v*"
-    # TEMPORARY (to be reverted): exercise the release pipeline from this
-    # branch. Branch pushes never publish (see PUBLISH in the publish job)
-    # and use a fixed test version.
-    branches:
-      - feature/arm64-build
   workflow_dispatch:
     inputs:
       version:
@@ -53,7 +48,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 90
     env:
-      RAW_VERSION: ${{ inputs.version || (github.ref_type == 'branch' && '1.3.2-windows.0-arm64test') || github.ref_name }}
+      RAW_VERSION: ${{ inputs.version || github.ref_name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -161,7 +156,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 30
     env:
-      RAW_VERSION: ${{ inputs.version || (github.ref_type == 'branch' && '1.3.2-windows.0-arm64test') || github.ref_name }}
+      RAW_VERSION: ${{ inputs.version || github.ref_name }}
       # Publishing is allowed only for a windows-v* tag push or a manual
       # dispatch with dry_run=false. Anything else (dry runs, branch pushes)
       # only uploads the combined assets as a workflow artifact.
