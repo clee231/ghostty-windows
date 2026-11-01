@@ -33,19 +33,19 @@ jobs:
           - arch: x86_64
             label: x64
             inno_arch: x64compatible
-            runner: windows-2025
             target_flags: ""
-          # GitHub-hosted Windows 11 ARM64 runner, so `zig build test` runs on
-          # real ARM64 hardware. Zig 0.16.0's aarch64-windows binary crashes
-          # on `zig build` (https://codeberg.org/ziglang/zig/issues/31865), so
-          # the x86_64 Zig runs under x64 emulation and targets ARM64.
+          # ARM64 is cross-compiled and packaged on the x64 runner; its unit
+          # tests run natively on windows-11-arm in `test-arm64`. Building on
+          # windows-11-arm is not viable with Zig 0.16.0: the native
+          # aarch64-windows Zig crashes on `zig build`
+          # (https://codeberg.org/ziglang/zig/issues/31865) and the x86_64 Zig
+          # under emulation is too slow (~50 min).
           - arch: aarch64
             label: arm64
             inno_arch: arm64
-            runner: windows-11-arm
             target_flags: "-Dtarget=aarch64-windows-gnu"
     name: build (${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
+    runs-on: windows-2025
     timeout-minutes: 90
     env:
       RAW_VERSION: ${{ inputs.version || github.ref_name }}
@@ -54,25 +54,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Zig
-        if: matrix.arch != 'aarch64'
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           cache-key: release-windows-${{ matrix.arch }}-${{ hashFiles('build.zig.zon') }}
-
-      # Workaround for https://codeberg.org/ziglang/zig/issues/31865 (see matrix).
-      - name: Setup Zig (x86_64 Zig under emulation on Windows ARM64)
-        if: matrix.arch == 'aarch64'
-        shell: pwsh
-        run: |
-          $ver = '0.16.0'
-          $sha = '68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e'
-          $zip = Join-Path $env:RUNNER_TEMP "zig-x86_64-windows-$ver.zip"
-          Invoke-WebRequest -UseBasicParsing -OutFile $zip "https://ziglang.org/download/$ver/zig-x86_64-windows-$ver.zip"
-          $got = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
-          if ($got -ne $sha) { throw "zig sha256 mismatch: $got" }
-          Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP -Force
-          Join-Path $env:RUNNER_TEMP "zig-x86_64-windows-$ver" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-          & (Join-Path $env:RUNNER_TEMP "zig-x86_64-windows-$ver\zig.exe") version
 
       - name: Fetch dependencies
         shell: pwsh
@@ -96,19 +80,22 @@ jobs:
         run: zig build -Dapp-runtime=win32 -Doptimize=ReleaseFast -Dcpu=baseline ${{ matrix.target_flags }} "-Dversion-string=$env:VERSION" -p build/release
 
       - name: Test
-        if: matrix.arch != 'aarch64'
-        run: zig build test -Dapp-runtime=win32 ${{ matrix.target_flags }}
+        if: matrix.arch == 'x86_64'
+        run: zig build test -Dapp-runtime=win32
 
-      # The emulated x86_64 Zig sees an x86_64 host, so it refuses to run the
-      # aarch64 test binary itself. Build + install it, then run it natively.
-      - name: Test (aarch64, run natively)
+      # -Demit-test-exe installs the test binary and skips running it here
+      # (the x64 host cannot execute it); `test-arm64` runs it.
+      - name: Build tests (aarch64)
         if: matrix.arch == 'aarch64'
-        shell: pwsh
-        run: |
-          zig build test -Dapp-runtime=win32 ${{ matrix.target_flags }} -Dcpu=baseline -Demit-test-exe -p zig-test
-          if ($LASTEXITCODE -ne 0) { throw "building tests failed with $LASTEXITCODE" }
-          & .\zig-test\bin\ghostty-test.exe
-          if ($LASTEXITCODE -ne 0) { throw "ghostty-test.exe failed with $LASTEXITCODE" }
+        run: zig build test -Dapp-runtime=win32 ${{ matrix.target_flags }} -Dcpu=baseline -Demit-test-exe -p zig-test
+
+      - name: Upload test binary (aarch64)
+        if: matrix.arch == 'aarch64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ghostty-test-windows-aarch64
+          path: zig-test/bin/ghostty-test.exe
+          if-no-files-found: error
 
       - name: Package zip
         shell: pwsh
@@ -141,8 +128,30 @@ jobs:
           path: release-assets/*
           if-no-files-found: error
 
-  publish:
+  test-arm64:
     needs: build
+    if: github.repository != 'ghostty-org/ghostty'
+    runs-on: windows-11-arm
+    timeout-minutes: 45
+    steps:
+      # Tests run from the repo root, like `zig build test` does.
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download test binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ghostty-test-windows-aarch64
+          path: zig-test/bin
+
+      - name: Test (native ARM64)
+        shell: pwsh
+        run: |
+          & .\zig-test\bin\ghostty-test.exe
+          if ($LASTEXITCODE -ne 0) { throw "ghostty-test.exe failed with $LASTEXITCODE" }
+
+  publish:
+    needs: [build, test-arm64]
     if: github.repository != 'ghostty-org/ghostty'
     runs-on: windows-2025
     timeout-minutes: 30
