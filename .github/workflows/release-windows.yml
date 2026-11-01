@@ -34,12 +34,16 @@ jobs:
             label: x64
             inno_arch: x64compatible
             runner: windows-2025
-          # GitHub-hosted native Windows 11 ARM64 runner. Building natively
-          # also runs `zig build test` on real ARM64 hardware.
+            target_flags: ""
+          # GitHub-hosted Windows 11 ARM64 runner, so `zig build test` runs on
+          # real ARM64 hardware. Zig 0.16.0's aarch64-windows binary crashes
+          # on `zig build` (https://codeberg.org/ziglang/zig/issues/31865), so
+          # the x86_64 Zig runs under x64 emulation and targets ARM64.
           - arch: aarch64
             label: arm64
             inno_arch: arm64
             runner: windows-11-arm
+            target_flags: "-Dtarget=aarch64-windows-gnu"
     name: build (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -50,9 +54,25 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Zig
+        if: matrix.arch != 'aarch64'
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           cache-key: release-windows-${{ matrix.arch }}-${{ hashFiles('build.zig.zon') }}
+
+      # Workaround for https://codeberg.org/ziglang/zig/issues/31865 (see matrix).
+      - name: Setup Zig (x86_64 Zig under emulation on Windows ARM64)
+        if: matrix.arch == 'aarch64'
+        shell: pwsh
+        run: |
+          $ver = '0.16.0'
+          $sha = '68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e'
+          $zip = Join-Path $env:RUNNER_TEMP "zig-x86_64-windows-$ver.zip"
+          Invoke-WebRequest -UseBasicParsing -OutFile $zip "https://ziglang.org/download/$ver/zig-x86_64-windows-$ver.zip"
+          $got = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          if ($got -ne $sha) { throw "zig sha256 mismatch: $got" }
+          Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP -Force
+          Join-Path $env:RUNNER_TEMP "zig-x86_64-windows-$ver" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & (Join-Path $env:RUNNER_TEMP "zig-x86_64-windows-$ver\zig.exe") version
 
       - name: Fetch dependencies
         shell: pwsh
@@ -73,10 +93,10 @@ jobs:
 
       - name: Build
         shell: pwsh
-        run: zig build -Dapp-runtime=win32 -Doptimize=ReleaseFast -Dcpu=baseline "-Dversion-string=$env:VERSION" -p build/release
+        run: zig build -Dapp-runtime=win32 -Doptimize=ReleaseFast -Dcpu=baseline ${{ matrix.target_flags }} "-Dversion-string=$env:VERSION" -p build/release
 
       - name: Test
-        run: zig build test -Dapp-runtime=win32
+        run: zig build test -Dapp-runtime=win32 ${{ matrix.target_flags }}
 
       - name: Package zip
         shell: pwsh

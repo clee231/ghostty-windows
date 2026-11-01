@@ -975,12 +975,15 @@ jobs:
           - arch: x86_64
             runner: ${{ github.repository == 'ghostty-org/ghostty' && 'namespace-profile-ghostty-windows' || 'windows-2025' }}
             build_flags: ""
-          # Native ARM64 build + tests on GitHub's hosted Windows 11 ARM64
-          # runner. -Dcpu=baseline so the artifact runs on any ARMv8 Windows
-          # device, not just the runner's CPU.
+          # ARM64 build + tests on GitHub's hosted Windows 11 ARM64 runner.
+          # Zig 0.16.0's aarch64-windows binary crashes on `zig build`
+          # (STATUS_ACCESS_VIOLATION, https://codeberg.org/ziglang/zig/issues/31865),
+          # so this job runs the x86_64 Zig under Windows' x64 emulation and
+          # targets ARM64 explicitly. -Dcpu=baseline so the artifact runs on
+          # any ARMv8 Windows device, not just the runner's CPU.
           - arch: aarch64
             runner: windows-11-arm
-            build_flags: "-Dcpu=baseline"
+            build_flags: "-Dtarget=aarch64-windows-gnu -Dcpu=baseline"
     name: build-windows-app (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -989,9 +992,25 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Zig
+        if: matrix.arch != 'aarch64'
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           cache-key: build-windows-app-${{ matrix.arch }}-${{ hashFiles('build.zig.zon') }}
+
+      # Workaround for https://codeberg.org/ziglang/zig/issues/31865 (see matrix).
+      - name: Setup Zig (x86_64 Zig under emulation on Windows ARM64)
+        if: matrix.arch == 'aarch64'
+        shell: pwsh
+        run: |
+          $ver = '0.16.0'
+          $sha = '68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e'
+          $zip = Join-Path $env:RUNNER_TEMP "zig-x86_64-windows-$ver.zip"
+          Invoke-WebRequest -UseBasicParsing -OutFile $zip "https://ziglang.org/download/$ver/zig-x86_64-windows-$ver.zip"
+          $got = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          if ($got -ne $sha) { throw "zig sha256 mismatch: $got" }
+          Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP -Force
+          Join-Path $env:RUNNER_TEMP "zig-x86_64-windows-$ver" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & (Join-Path $env:RUNNER_TEMP "zig-x86_64-windows-$ver\zig.exe") version
 
       - name: Fetch dependencies
         shell: pwsh
@@ -1014,7 +1033,7 @@ jobs:
           if-no-files-found: error
 
       - name: Test
-        run: zig build test -Dapp-runtime=win32
+        run: zig build test -Dapp-runtime=win32 ${{ matrix.build_flags }}
 
   build-linux:
     strategy:
