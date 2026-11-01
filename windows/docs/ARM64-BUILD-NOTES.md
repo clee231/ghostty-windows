@@ -242,7 +242,53 @@ This branch was cut from upstream `main` at `c975f49`. Nothing has been sent ups
 
   The release layout itself is checked only statically (actionlint passes). Its build, cross-compile and test steps are the same commands that passed in the Test run. Packaging (`make-zip.ps1 -Arch aarch64` and ISCC with `InnoArch=arm64`) has not run yet.
 
+### Release workflow test (temporary branch trigger)
+
+The fork's `main` and its default branch were not touched, as Chase asked.
+
+- `76cf3ec` (**permanent**): the publish job now has a `PUBLISH` flag.
+  - It is true only for a push of a `windows-v*` tag, or for `workflow_dispatch` with `dry_run=false`.
+  - Every other trigger uploads `release-assets-all` as a workflow artifact instead.
+  - The publish script also throws an error for any other event or ref.
+- `903ccb9` (**TEMP**): added `push: branches: [feature/arm64-build]` and a fixed test version `1.3.2-windows.0-arm64test` for branch refs.
+- `d1b3eda`: reverts `903ccb9` with `[skip ci]`. The net diff against `76cf3ec` is empty. The push started no runs: `[skip ci]` skips them, and the reverted workflow has no branch trigger.
+- Before pushing, I audited the other workflows. `test.yml` and `nix.yml` run on any push but never publish. `release-tag.yml` runs only on `v*` tags. `release-tip.yml` has no push trigger.
+
+**Run:** https://github.com/clee231/ghostty-windows/actions/runs/41275315973. **Success**, 00:01 to 00:40 America/Chicago.
+
+| Job | Runner | Result |
+|---|---|---|
+| `build (x86_64)` | windows-2025 | success: build, full tests, zip, installer |
+| `build (aarch64)` | windows-2025 | success: cross-build, test exe, zip (ARM64 ConPTY), installer (`/DInnoArch=arm64`, Inno Setup 6.7.1) |
+| `test-arm64` | windows-11-arm | success: **3809 passed, 61 skipped, 0 failed** |
+| `publish` | windows-2025 | success: checksums, uploaded `release-assets-all`; **Publish release: skipped** |
+
+After the run, the fork had 0 releases and 0 `windows-v*` tags.
+
+The parallel Test run, https://github.com/clee231/ghostty-windows/actions/runs/41275315863, was also a success.
+
+No packaging or installer fixes were needed: `make-zip.ps1 -Arch aarch64` and the `InnoArch` change in `ghostty.iss` worked on the first run.
+
+**Artifacts** are in `the build machine's `ghostty-arm64-out/release-test/``:
+- `release-assets-all/`: the 4 assets plus `SHA256SUMS.txt` (`sha256sum -c` reports all OK).
+- `release-assets-{arm64,x64}/`: the per-architecture artifacts.
+- `unz-arm64/` and `unz-x64/`: the zips extracted. Both have the same file layout.
+- `VERIFY.txt`: `file` output for everything.
+
+What `file` reports:
+- `ghostty.exe`, `conpty.dll` and `OpenConsole.exe` from the arm64 zip: all `PE32+ … ARM64`.
+- The same three files from the x64 zip: all `x86-64`.
+- Both `Setup-*.exe` installers: `PE32 … Intel i386`. That is expected, because Inno Setup's installer stub is always 32-bit x86.
+- I couldn't unpack the installer payload offline, because innoextract 1.9 doesn't support Inno Setup 6.7. The CI log does show ISCC compressing the ARM64 `staging\ghostty\bin\{conpty.dll,ghostty.exe,OpenConsole.exe}` with `/DInnoArch=arm64`, and ending with "Successful compile".
+
+| sha256 | file |
+|---|---|
+| `c36b6428a8b0212dd7819d259541ae1705d8d2643a6500b2aa25449d7d4ddb5d` | Ghostty-Windows-arm64.zip |
+| `9cdaae7c36e2727c39e9fc00760ce2e7d9cde7b40dca3fa29b4668406f754469` | Ghostty-Windows-Setup-arm64.exe |
+| `a85fb5098009604472c14192f42b52c6d4db1b7e0b2599f3d6aea57c103502de` | Ghostty-Windows-x64.zip |
+| `aaddc25056abba79a854a6114dd78d0304ee7bb90897a4a3891ff31d0f74ed5d` | Ghostty-Windows-Setup-x64.exe |
+
 ### Known limitations
 
-- **`release-windows.yml` can't be manually triggered on the fork yet.** GitHub has only registered `nix.yml` and `test.yml` for this fork, and `gh workflow run release-windows.yml` returns `HTTP 404: workflow release-windows.yml not found on the default branch`. It will register once a commit touching that file lands on the fork's `main`, or when a `windows-v*` tag is pushed (note that a tag push publishes a real release).
-- **Not yet launched on Windows on ARM hardware:** the app's GUI, ConPTY, and OpenGL via the Compatibility Pack still need a check on a real device.
+- **Not checked on a real device:** the app has not been launched on Windows on ARM hardware (GUI, ConPTY, OpenGL through the Compatibility Pack, installer).
+- **Manual dispatch on the fork:** `workflow_dispatch` of `release-windows.yml` won't work there until a commit touching that file lands on the fork's default branch.
