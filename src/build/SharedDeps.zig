@@ -510,8 +510,19 @@ pub fn add(
     }
 
     // Other dependencies, mostly pure Zig
+    // Pass the real target so glad's translate-c sees the target's
+    // pointer-sized GL types (`_WIN64` etc.) when cross-compiling. On
+    // Windows, always translate with the GNU ABI (mingw-w64 headers): Zig's
+    // translate-c cannot parse MSVC's winnt.h, the GL types are identical
+    // under both ABIs (LLP64), and native Windows builds already resolved
+    // this dependency to `native-windows-gnu` before this change.
+    const opengl_target = if (target.result.os.tag == .windows) gl: {
+        var query = target.query;
+        query.abi = .gnu;
+        break :gl b.resolveTargetQuery(query);
+    } else target;
     if (b.lazyDependency("opengl", .{
-        .target = target,
+        .target = opengl_target,
         .optimize = optimize,
     })) |dep| {
         step.root_module.addImport("opengl", dep.module("opengl"));
