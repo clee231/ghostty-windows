@@ -223,6 +223,25 @@ This branch was cut from upstream `main` at `c975f49`. Nothing has been sent ups
 - **`ghostty.iss`:** `ArchitecturesAllowed` comes from `InnoArch`, which defaults to `x64compatible`.
 - **`build.zig`:** `-Demit-test-exe` now also sets `skip_foreign_checks` on the test Run step.
 
+### Run status (America/Chicago)
+
+- **Test, final:** https://github.com/clee231/ghostty-windows/actions/runs/41267986708 (head `703a287`). **Success.**
+  - `build-windows-app` (x86_64, unchanged from upstream): success, 22:09 to 22:36. Build plus full tests.
+  - `build-windows-app-aarch64`: success, 22:09 to 22:26. Cross-compiled on windows-2025.
+    - Artifact `ghostty-windows-aarch64`: `PE32+ executable for MS Windows 6.00 (GUI), ARM64`.
+    - sha256 `8c1f94ec8bfff12483853b533217ec08b22fdd184b2874b05ef266218af49df7`.
+    - 
+  - `test-windows-app-aarch64`: success, 22:26 to 22:44. Ran natively on windows-11-arm: **3809 passed, 61 skipped, 0 failed** (of 3870).
+- **Earlier runs:**
+  - https://github.com/clee231/ghostty-windows/actions/runs/41261075432: native aarch64 Zig crash; cancelled.
+  - https://github.com/clee231/ghostty-windows/actions/runs/41261338138: x64 glad/MSVC regression, plus the wgl test alignment error.
+  - https://github.com/clee231/ghostty-windows/actions/runs/41263757057: x64 green; aarch64 under emulation timed out at 60 min.
+- **release-windows dry run: not run.** `gh workflow run release-windows.yml` (retried at 20:30, 21:16 and 22:45) returns `HTTP 404: workflow release-windows.yml not found on the default branch`. GitHub has registered only `nix.yml` and `test.yml` for the fork. To register it, use one of these:
+  1. Push any commit to the fork's `main` that touches `.github/workflows/release-windows.yml`, for example by merging this branch into the fork's `main`. Then run `gh workflow run release-windows.yml -R clee231/ghostty-windows --ref feature/arm64-build -f version=1.3.2-windows.0-arm64test -f dry_run=true`.
+  2. Push a `windows-v*` tag. Don't use this for testing: on a tag push `dry_run` is false, so it **publishes a real release**.
+
+  The release layout itself is checked only statically (actionlint passes). Its build, cross-compile and test steps are the same commands that passed in the Test run. Packaging (`make-zip.ps1 -Arch aarch64` and ISCC with `InnoArch=arm64`) has not run yet.
+
 ### Known limitations
 
 - **`release-windows.yml` can't be manually triggered on the fork yet.** GitHub has only registered `nix.yml` and `test.yml` for this fork, and `gh workflow run release-windows.yml` returns `HTTP 404: workflow release-windows.yml not found on the default branch`. It will register once a commit touching that file lands on the fork's `main`, or when a `windows-v*` tag is pushed (note that a tag push publishes a real release).
