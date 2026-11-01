@@ -157,6 +157,10 @@ jobs:
     timeout-minutes: 30
     env:
       RAW_VERSION: ${{ inputs.version || github.ref_name }}
+      # Publishing is allowed only for a windows-v* tag push or a manual
+      # dispatch with dry_run=false. Anything else (dry runs, branch pushes)
+      # only uploads the combined assets as a workflow artifact.
+      PUBLISH: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/windows-v')) || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -185,7 +189,7 @@ jobs:
           Get-Content "$assets/SHA256SUMS.txt"
 
       - name: Upload combined assets (dry run)
-        if: ${{ inputs.dry_run }}
+        if: env.PUBLISH != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-assets-all
@@ -193,11 +197,14 @@ jobs:
           if-no-files-found: error
 
       - name: Publish release
-        if: ${{ !inputs.dry_run }}
+        if: env.PUBLISH == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $isTag = $env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -like 'refs/tags/windows-v*'
+          $isDispatch = $env:GITHUB_EVENT_NAME -eq 'workflow_dispatch'
+          if (-not ($isTag -or $isDispatch)) { throw "refusing to publish from event '$env:GITHUB_EVENT_NAME' ref '$env:GITHUB_REF'" }
           $files = Get-ChildItem release-assets -File | ForEach-Object { $_.FullName }
           gh release view $env:TAG *> $null
           if ($LASTEXITCODE -eq 0) {
